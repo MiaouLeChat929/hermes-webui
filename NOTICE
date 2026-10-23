@@ -1,0 +1,20 @@
+This repository is an operator-owned fork of the upstream repository at
+https://github.com/nesquena/hermes-webui (MIT License, Copyright (c) 2025
+Hermes Web UI Contributors).
+
+Upstream git history: 10,793 commits, preserved as a git bundle at
+`~/.hermes/profiles/webapp-fh/cache/scratch/hermes-webui-backup-20261022-2321/history.bundle`
+and as a working tree tarball at
+`~/.hermes/profiles/webapp-fh/cache/scratch/hermes-webui-backup-20261022-2321/repo.tar`.
+
+Both artifacts are outside this repo and not tracked by git. To recover the full
+upstream history:
+
+```bash
+git clone /path/to/history.bundle hermes-webui-upstream
+# or
+tar -xf /path/to/repo.tar -C /path/to/extract
+```
+
+Operator changes begin at commit `e1854ea` ("chore: bootstrap..."). All commits
+after that are fleet-specific patches and tests.
