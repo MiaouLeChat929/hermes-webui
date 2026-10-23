@@ -1770,15 +1770,39 @@ def test_100dvh_viewport_height():
         "style.css must use 100dvh for correct mobile viewport height (100vh hides content under address bar)"
 
 
-def test_viewport_disables_page_zoom_for_native_pwa_shell():
-    """Installed PWA launches should not rubber-band into browser-style page zoom."""
+def test_viewport_allows_pinch_zoom():
+    """The shell must not block pinch-zoom. WCAG 1.4.4 (Resize Text).
+
+    This used to assert `maximum-scale=1` and `user-scalable=no`, on the theory
+    that an installed PWA should not rubber-band into browser-style page zoom.
+    That reasoning is dead for three reasons:
+
+    1. iOS Safari has ignored `user-scalable=no` since iOS 10 (2016) as a
+       deliberate accessibility improvement, so the lock never applied to iPhone
+       users anyway. It only ever bit Android Chrome and Samsung Internet.
+    2. The real cause of unwanted focus-zoom is a form field under 16px, and
+       that is already fixed at the source: the `@media (hover:none) and
+       (pointer:coarse)` rule sets
+       `input,textarea,select{font-size:max(16px,1em)!important}`. Measured on a
+       coarse-pointer viewport, #sessionSearch computes to 16px, not 13px.
+    3. Blocking pinch-zoom is a WCAG 1.4.4 failure with no compensating benefit.
+
+    So the invariant worth protecting is the 16px threshold, not the lock. That
+    is asserted separately by test_touch_device_inputs_meet_zoom_threshold.
+    """
     m = re.search(r'<meta\s+name="viewport"\s+content="([^"]+)"', HTML)
     assert m, "viewport meta tag not found in index.html"
     content = m.group(1)
     assert 'width=device-width' in content, "viewport must set width=device-width"
     assert 'initial-scale=1' in content, "viewport must set initial-scale=1"
-    assert 'maximum-scale=1' in content, "viewport must set maximum-scale=1"
-    assert 'user-scalable=no' in content, "viewport must set user-scalable=no"
+    assert 'maximum-scale' not in content, (
+        "viewport must not set maximum-scale: it blocks pinch-zoom and fails "
+        "WCAG 1.4.4"
+    )
+    assert 'user-scalable=no' not in content, (
+        "viewport must not set user-scalable=no: it blocks pinch-zoom and fails "
+        "WCAG 1.4.4"
+    )
 
 
 def test_viewport_requests_keyboard_content_resize():
