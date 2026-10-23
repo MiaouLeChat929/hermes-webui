@@ -65,3 +65,19 @@ git diff HEAD upstream/master -- static/style.css      # compare a file
 This repo's history is unrelated to upstream's (fresh root commit), so a
 `git merge upstream/master` would conflict on every file. Cherry-pick by SHA, or
 diff-and-port a file by hand.
+## Divergence from upstream (measured 2026-10-22)
+
+At the moment of the fork, upstream had 438 commits this repo did not have.
+Re-checked after the fix landed: upstream is at 11,394 commits and has moved
+**601 commits ahead** since this repo was bootstrapped.
+
+- 52 files differ, ~12,900 insertions / ~1,000 deletions against this repo.
+- `static/ui.js` and `static/terminal.js` carry most of it.
+- Upstream **still has the collapsed-panel bug** at
+  `static/style.css:3149`, unchanged. The only difference on that rule is this
+  repo's fix, so the patch applies to upstream as-is when porting.
+
+Practical read: this repo is a fork that tracks nothing automatically. Pulling
+upstream means porting by hand (cherry-pick a SHA, or re-apply a patch) and
+re-running the panel tests. That is the accepted cost of owning the code
+rather than filing upstream.
