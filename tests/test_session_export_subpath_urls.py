@@ -26,6 +26,10 @@ def _function_source(source: str, name: str) -> str:
     marker = f"function {name}("
     start = source.find(marker)
     assert start >= 0, f"{name} must be defined in product source"
+    # An async function must keep its `async` prefix: the extracted source
+    # awaits the native picker, and a bare `function` body rejects `await`.
+    if source[start - 6 : start] == "async ":
+        start -= 6
     brace = source.find("{", start)
     assert brace >= 0
     depth = 0
@@ -45,11 +49,15 @@ def _onclick_source(source: str, element_id: str) -> str:
     assert start >= 0, f"{element_id} must have an export click handler"
     arrow = source.find("()=>", start)
     assert arrow >= 0
+    # An async handler awaits the native File System Access picker before
+    # falling back to the anchor download. The extracted source must keep the
+    # `async` prefix, otherwise its `await` lands outside an async function.
+    prefix_start = arrow - 5 if source[arrow - 5 : arrow] == "async" else arrow
     expression_start = arrow + len("()=>")
     if source[expression_start] != "{":
         end = source.find(";", expression_start)
         assert end >= 0
-        return source[arrow:end]
+        return source[prefix_start:end]
     brace = expression_start
     assert brace >= 0
     depth = 0
@@ -59,7 +67,7 @@ def _onclick_source(source: str, element_id: str) -> str:
         elif source[index] == "}":
             depth -= 1
             if depth == 0:
-                return source[arrow : index + 1]
+                return source[prefix_start : index + 1]
     raise AssertionError(f"unterminated {element_id} click handler")
 
 
@@ -84,23 +92,35 @@ const elements = {{btnExportJSON: {{}}, btnExportHTML: {{}}}};
 const $ = (id) => elements[id];
 const S = {{session: {{session_id: 'session /?&=✓'}}}};
 const getComputedStyle = () => ({{getPropertyValue: () => ''}});
+// The export handlers open the native File System Access picker FIRST and
+// fall back to the anchor download when it is unavailable. 'unsupported'
+// exercises that fallback, which is the path whose URL this test asserts.
+const openSaveHandle = async () => 'unsupported';
+const writeToHandle = async () => 'failed';
+const showToast = () => {{}};
+const t = (key) => key;
+const fetch = async () => ({{text: async () => ''}});
 const handlers = new Function(
   'document', 'location', 'URL', '$', 'S', 'getComputedStyle', 'btoa', 'unescape',
+  'openSaveHandle', 'writeToHandle', 'showToast', 't', 'fetch',
   {program},
-)(document, location, URL, $, S, getComputedStyle, btoa, unescape);
-handlers[0]();
-handlers[1]();
-const urls = clicked.map((anchor) => {{
-  const url = new URL(anchor.href);
-  return {{
-  pathname: url.pathname,
-  session_id: url.searchParams.get('session_id'),
-  format: url.searchParams.get('format') || '',
-  theme: url.searchParams.get('theme') || '',
-  palette: Boolean(url.searchParams.get('palette')),
-  }};
-}});
-console.log(JSON.stringify(urls));
+)(document, location, URL, $, S, getComputedStyle, btoa, unescape,
+  openSaveHandle, writeToHandle, showToast, t, fetch);
+(async () => {{
+  await handlers[0]();
+  await handlers[1]();
+  const urls = clicked.map((anchor) => {{
+    const url = new URL(anchor.href);
+    return {{
+    pathname: url.pathname,
+    session_id: url.searchParams.get('session_id'),
+    format: url.searchParams.get('format') || '',
+    theme: url.searchParams.get('theme') || '',
+    palette: Boolean(url.searchParams.get('palette')),
+    }};
+  }});
+  console.log(JSON.stringify(urls));
+}})();
 """
     result = subprocess.run(
         [NODE, "-e", script],

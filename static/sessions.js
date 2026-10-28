@@ -2384,6 +2384,12 @@ async function newSession(flash, options={}){
       _clearEmptyComposerModelOverride();
     }
     S.session=data.session;if(typeof _adoptRegenerationRevision==='function') _adoptRegenerationRevision(data.session);S.messages=data.session.messages||[];
+    // First meaningful use: ask the browser to protect this origin's storage
+    // from eviction under disk pressure. Deliberately NOT on page load — a
+    // persist() request fired at load is a prompt to a user who has not done
+    // anything yet, and browsers answer that less generously. Silent refusal
+    // is normal and must stay silent (issue #1 D5).
+    if(typeof requestPersistentStorage==='function'){try{void requestPersistentStorage();}catch(_){}}
     S._pendingSessionToolsets=null;
     if(_sessionSourceFilter==='cli') _sessionSourceFilter='webui';
     if(typeof _hydrateTodosFromSession==='function') _hydrateTodosFromSession(S.session);

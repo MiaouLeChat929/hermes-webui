@@ -1,7 +1,7 @@
 // Early boot initialization that must run before any other code.
 // These run during script evaluation to handle server-stopped state
 // and cross-tab shutdown broadcasts as early as possible.
-(function(){
+(function() {
   // Clear stale stop-server flag on successful page load (server is reachable)
   try{localStorage.removeItem('hermes-webui-server-stopped');}catch(_){}
   // Listen for shutdown broadcast from other tabs
@@ -10,6 +10,20 @@
     _stopChan.onmessage = function() { _showServerStopped(); };
   } catch(_) {}
 })();
+
+// App Badge: reflect the number of sessions with active work. Silently
+// ignored by browsers without the Badging API (issue #1 D4).
+function updateSessionBadge() {
+  if (!navigator.setAppBadge && !navigator.clearAppBadge) return;
+  try {
+    const running = Object.keys(INFLIGHT || {}).length;
+    if (running > 0) {
+      navigator.setAppBadge(running).catch(function() {});
+    } else {
+      navigator.clearAppBadge().catch(function() {});
+    }
+  } catch (_) {}
+}
 
 // cancelStream: stop the active chat stream.
 // See docs/rfcs/webui-run-state-consistency-contract.md (Invariants #2, #4)
@@ -2637,11 +2651,18 @@ $('btnNewChat').onclick=async()=>{
   // queued a second full list read in front of the composer focus (#7936).
   await newSession();closeMobileSidebar();$('msg').focus();
 };
-$('btnDownload').onclick=()=>{
+// Export Markdown — native saveFilePicker with <a download> fallback
+$('btnDownload').onclick=async()=>{
   if(!S.session)return;
-  const blob=new Blob([transcript()],{type:'text/markdown'});
-  const a=document.createElement('a');a.href=URL.createObjectURL(blob);
-  a.download=`hermes-${S.session.session_id}.md`;a.click();URL.revokeObjectURL(a.href);
+  const res=await saveTextFile({
+    content:transcript(),
+    mime:'text/markdown',
+    suggestedName:`hermes-${S.session.session_id}.md`,
+    types:[{description:'Markdown file',accept:{'text/markdown':['.md']}}],
+  });
+  // 'saved' and 'downloaded' are both successes. 'cancelled' is NOT an error
+  // and must produce no toast. Only 'failed'/'unsupported' surface a problem.
+  if(res==='failed'||res==='unsupported')showToast(t('export_failed'));
 };
 function _buildSessionExportUrl(sessionId,params){
   const url=new URL('api/session/export',document.baseURI||location.href);
@@ -2651,11 +2672,32 @@ function _buildSessionExportUrl(sessionId,params){
   });
   return url.href;
 }
-$('btnExportJSON').onclick=()=>{
+// Export JSON — native saveFilePicker with <a download> fallback.
+// TWO PHASES on purpose: the picker MUST open inside the click gesture, so
+// the handle is requested FIRST and the server fetch happens afterwards
+// (an `await fetch()` before the picker loses the transient activation and
+// Safari silently refuses to open it).
+$('btnExportJSON').onclick=async()=>{
   if(!S.session)return;
-  const url=_buildSessionExportUrl(S.session.session_id);
-  const a=document.createElement('a');a.href=url;
-  a.download=`hermes-${S.session.session_id}.json`;a.click();
+  const filename=`hermes-${S.session.session_id}.json`;
+  const opened=await openSaveHandle({
+    suggestedName:filename,
+    types:[{description:'JSON file',accept:{'application/json':['.json']}}],
+  });
+  if(opened==='cancelled')return;
+  if(opened==='unsupported'||opened==='failed'){
+    // No picker (or it refused): the original <a download> path, byte-identical.
+    const a=document.createElement('a');a.href=_buildSessionExportUrl(S.session.session_id);
+    a.download=filename;a.click();
+    return;
+  }
+  try{
+    const resp=await fetch(_buildSessionExportUrl(S.session.session_id),{credentials:'include'});
+    const res=await writeToHandle(opened.handle,await resp.text());
+    if(res!=='saved')showToast(t('export_failed'));
+  }catch(e){
+    showToast(t('export_failed'));
+  }
 };
 $('btnShareSession').onclick=async()=>{
   if(!S.session) return;
@@ -2669,6 +2711,16 @@ $('btnShareSession').onclick=async()=>{
         cancelLabel:t('share_session_refresh_snapshot'),
       });
       if(reuse){
+        // Try native share sheet first; fall back to clipboard+open (issue #1 D1)
+        if (typeof shareSession === 'function') {
+          const shared = await shareSession({
+            title: t('share_session'),
+            url: existing,
+          });
+          if (shared === 'shared') { showToast(t('share_session_link_copied')); return; }
+          if (shared === 'cancelled') return;
+          // 'failed' or 'unsupported' → clipboard fallback below
+        }
         await _copyText(existing);
         showToast(t('share_session_link_copied'));
         window.open(existing,'_blank','noopener');
@@ -2678,6 +2730,18 @@ $('btnShareSession').onclick=async()=>{
     const res=await api('/api/share/create',{method:'POST',body:JSON.stringify({session_id:S.session.session_id})});
     if(res&&res.session) S.session=res.session;
     const href=new URL(String(res&&res.share&&res.share.url||''),location.origin).href;
+    // Native share sheet first; clipboard as fallback (issue #1 D1)
+    if (typeof shareSession === 'function') {
+      const shared = await shareSession({
+        title: t('share_session'),
+        url: href,
+      });
+      if (shared === 'shared' || shared === 'cancelled') {
+        if (shared === 'shared') showToast(t('share_session_created'));
+        if(typeof _syncHermesPanelSessionActions==='function') _syncHermesPanelSessionActions();
+        return;
+      }
+    }
     await _copyText(href);
     showToast(t('share_session_created'));
     if(typeof _syncHermesPanelSessionActions==='function') _syncHermesPanelSessionActions();
@@ -2704,7 +2768,7 @@ $('btnStopSharingSession').onclick=async()=>{
     showToast(t('share_session_revoke_failed')+(err&&err.message?err.message:String(err||'')),4000,'error');
   }
 };
-function exportSessionHTML(session){
+async function exportSessionHTML(session){
   const target=session||S.session;
   if(!target||!target.session_id)return;
   const sid=target.session_id;
@@ -2731,29 +2795,88 @@ function exportSessionHTML(session){
   const clean={};for(const k in palette){if(palette[k])clean[k]=palette[k];}
   const paletteB64=btoa(unescape(encodeURIComponent(JSON.stringify(clean))));
   const url=_buildSessionExportUrl(sid,{format:'html',theme,palette:paletteB64});
-  const a=document.createElement('a');a.href=url;
-  a.download=`hermes-${sid}.html`;a.click();
+  const filename=`hermes-${sid}.html`;
+  // Two-phase save (same gesture rule as the JSON export): open the picker
+  // FIRST, inside the click, then fetch the server-rendered HTML and write it.
+  const opened=await openSaveHandle({
+    suggestedName:filename,
+    types:[{description:'HTML file',accept:{'text/html':['.html']}}],
+  });
+  if(opened==='cancelled')return;
+  if(opened==='unsupported'||opened==='failed'){
+    const a=document.createElement('a');a.href=url;
+    a.download=filename;a.click();
+    return;
+  }
+  try{
+    const resp=await fetch(url,{credentials:'include'});
+    const content=await resp.text();
+    const res=await writeToHandle(opened.handle,content);
+    if(res!=='saved')showToast(t('export_failed'));
+  }catch(e){
+    showToast(t('export_failed'));
+  }
 }
 $('btnExportHTML').onclick=()=>exportSessionHTML();
-$('btnImportJSON').onclick=()=>$('importFileInput').click();
+// Import JSON — native openFilePicker with <input type="file"> fallback
+async function _importSessionFromFile(file) {
+  if (!file) return;
+  try {
+    const text = await file.text();
+    const data = JSON.parse(text);
+    const res = await api('/api/session/import', { method: 'POST', body: JSON.stringify(data) });
+    if (res.ok && res.session) {
+      await loadSession(res.session.session_id);
+      await renderSessionList();
+      if (_currentPanel === 'settings') switchPanel('chat');
+      showToast(t('session_imported'));
+    }
+  } catch (err) {
+    showToast(t('import_failed') + (err.message || t('import_invalid_json')));
+  }
+}
+$('btnImportJSON').onclick=async()=>{
+  const file=await openTextFile({
+    types:[
+      {description:'JSON file',accept:{'application/json':['.json']}},
+      {description:'Text file',accept:{'text/plain':['.txt','.md']}},
+    ],
+  });
+  // null = user cancelled the native picker (do not fall through to <input>)
+  // 'unsupported' = no showOpenFilePicker, let the existing <input> take over
+  if(file==='unsupported')$('importFileInput').click();
+  if(file&&file!=='unsupported')await _importSessionFromFile(file);
+};
 $('importFileInput').onchange=async(e)=>{
   const file=e.target.files[0];
   if(!file)return;
   e.target.value='';
-  try{
-    const text=await file.text();
-    const data=JSON.parse(text);
-    const res=await api('/api/session/import',{method:'POST',body:JSON.stringify(data)});
-    if(res.ok&&res.session){
-      await loadSession(res.session.session_id);
-      await renderSessionList();
-      if(_currentPanel==='settings') switchPanel('chat');
-      showToast(t('session_imported'));
-    }
-  }catch(err){
-    showToast(t('import_failed')+(err.message||t('import_invalid_json')));
-  }
+  await _importSessionFromFile(file);
 };
+// Launch Queue consumer: the OS handed the app a file (manifest
+// `file_handlers`). Without this the declared handler is a hollow promise —
+// the app opens, the file is dropped, and the user sees an empty chat.
+//   .json            -> import it as a session (the D3 journey, OS entry point)
+//   .txt / .md       -> prefill the composer so the user can send it to the agent
+registerLaunchHandler(async (file) => {
+  const name = String(file.name || '').toLowerCase();
+  if (name.endsWith('.json')) {
+    await _importSessionFromFile(file);
+    return;
+  }
+  if (name.endsWith('.txt') || name.endsWith('.md')) {
+    try {
+      const text = await file.text();
+      const composer = $('msg');
+      if (!composer) return;
+      composer.value = text;
+      composer.dispatchEvent(new Event('input', { bubbles: true }));
+      composer.focus();
+      // No toast: the text landing in a focused composer IS the feedback.
+      // A hardcoded English string here would be an i18n key debt.
+    } catch (_) {}
+  }
+});
 // btnRefreshFiles is now panel-icon-btn in header (see HTML)
 // #6710: closing the preview retires any in-flight preview open (the counter is
 // advanced in the body below), so a slow completion cannot repaint the panel

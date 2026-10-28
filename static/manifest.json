@@ -49,5 +49,24 @@
       "type": "image/png",
       "purpose": "any maskable"
     }
+  ],
+  "launch_handler": {
+    "client_mode": "focus-existing"
+  },
+  "file_handlers": [
+    {
+      "action": "./",
+      "accept": {
+        "application/json": [".json"],
+        "text/plain": [".txt", ".md"]
+      },
+      "icons": [
+        {
+          "src": "static/favicon-192.png",
+          "sizes": "192x192",
+          "type": "image/png"
+        }
+      ]
+    }
   ]
 }

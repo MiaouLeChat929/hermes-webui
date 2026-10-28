@@ -9893,6 +9893,7 @@ async function handleComposerPrimaryAction(){
 function setBusy(v){
   S.busy=v;
   updateSendBtn();
+  if(typeof updateSessionBadge==='function'){try{updateSessionBadge();}catch(_){}}
   if(!v){
     if(typeof _clearActivityElapsedTimer==='function') _clearActivityElapsedTimer();
     setStatus('');
