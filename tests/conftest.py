@@ -153,10 +153,39 @@ def _safe_temp_root() -> pathlib.Path:
 _TEST_STATE_ROOT = pathlib.Path(
     os.getenv('HERMES_WEBUI_TEST_STATE_ROOT', str(_safe_temp_root()))
 ) / 'hermes-webui-tests'
-TEST_STATE_DIR = pathlib.Path(os.getenv(
-    'HERMES_WEBUI_TEST_STATE_DIR',
-    str(_TEST_STATE_ROOT / _auto_state_dir_name(REPO_ROOT, TEST_PORT))
-)).resolve()
+_EXPLICIT_STATE_DIR = os.getenv('HERMES_WEBUI_TEST_STATE_DIR')
+TEST_STATE_DIR = pathlib.Path(
+    _EXPLICIT_STATE_DIR
+    if _EXPLICIT_STATE_DIR
+    else str(_TEST_STATE_ROOT / _auto_state_dir_name(REPO_ROOT, TEST_PORT))
+).resolve()
+
+# Overlap guard: a default run puts its state dir INSIDE the default root
+# (<root>/hermes-webui-tests/<per-run>). If the explicit state dir CONTAINS
+# that root, a concurrent default run lives inside it, and the two runs wipe
+# each other's state: the teardown of one deletes the state of the other, and
+# the result is a suite that reports dozens of phantom failures against a
+# healthy tree.
+#
+# This is not hypothetical: setting HERMES_WEBUI_TEST_STATE_DIR to the
+# default root while another run used the default produced 40 failures and
+# 2 errors out of 22027 tests, all of them cross-contamination.
+#
+# The direction matters. The conftest exports its resolved state dir into the
+# environment, so the xdist workers re-import it and see their OWN directory
+# as an explicit override. That directory is a CHILD of the root and is
+# perfectly safe, so the guard only fires when the explicit dir is the root
+# itself or an ancestor of it.
+if _EXPLICIT_STATE_DIR:
+    _explicit = TEST_STATE_DIR
+    if _explicit == _TEST_STATE_ROOT or _explicit in _TEST_STATE_ROOT.parents:
+        raise RuntimeError(
+            f'REFUSING TO RUN: the explicit test state dir {_explicit} contains the '
+            f'default state root {_TEST_STATE_ROOT}, so a concurrent default run '
+            f'would put its state inside yours and the two teardowns would erase '
+            f'each other. Point HERMES_WEBUI_TEST_STATE_DIR at a directory of its '
+            f'own, outside {_TEST_STATE_ROOT}.'
+        )
 
 # Production-proximity guard: refuse to run if the resolved test state dir lands
 # inside the REAL Hermes home tree — a misconfigured HERMES_WEBUI_TEST_STATE_DIR
