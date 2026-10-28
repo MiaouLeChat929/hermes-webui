@@ -125,8 +125,33 @@ TEST_BASE      = f"http://127.0.0.1:{TEST_PORT}"
 # profile home). We now anchor the default under the OS temp dir, in a dedicated
 # `hermes-webui-tests/` namespace, fully outside any production tree.
 import tempfile as _tempfile
+
+
+def _safe_temp_root() -> pathlib.Path:
+    """A temp root that is NOT inside the production Hermes home.
+
+    `tempfile.gettempdir()` honours TMPDIR, and the Hermes agent runtime
+    sets TMPDIR under ~/.hermes/profiles/<profile>/cache/scratch (house
+    convention: never write under the system temp dir). A test state dir
+    under that path IS inside the production tree, which the guard below
+    refuses on purpose. So when the resolved temp root sits under
+    ~/.hermes, fall back to the real OS temp.
+
+    Without this, the suite is unrunnable for every Hermes agent: the
+    guard aborts at import time with "REFUSING TO RUN" before a single
+    test executes.
+    """
+    root = pathlib.Path(_tempfile.gettempdir()).resolve()
+    prod = (pathlib.Path.home() / '.hermes').resolve()
+    if root == prod or prod in root.parents:
+        for fallback in ('/tmp', '/var/tmp'):
+            if os.path.isdir(fallback):
+                return pathlib.Path(fallback).resolve()
+    return root
+
+
 _TEST_STATE_ROOT = pathlib.Path(
-    os.getenv('HERMES_WEBUI_TEST_STATE_ROOT', _tempfile.gettempdir())
+    os.getenv('HERMES_WEBUI_TEST_STATE_ROOT', str(_safe_temp_root()))
 ) / 'hermes-webui-tests'
 TEST_STATE_DIR = pathlib.Path(os.getenv(
     'HERMES_WEBUI_TEST_STATE_DIR',
